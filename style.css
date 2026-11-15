@@ -454,7 +454,7 @@ body.is-orb .screen { max-width: none; padding: 0; }
 body.is-hero { background: #000; overflow: hidden; height: 100%; }
 body.is-hero .screen { max-width: none; padding: 0; }
 .hero { --accent: #aa88ff; --text: #dddddd; --muted: #8a8a8a; --chip: #1c1c1c; --line: #2a2a2a;
-  position: fixed; inset: 0; background: #000 url('assets/solar-system.png') center / cover no-repeat; color: var(--text);
+  position: fixed; inset: 0; background: #05070c url('assets/solar-system.jpg') center / cover no-repeat; color: var(--text);
   font: 400 13px/1.35 "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace; letter-spacing: 0.02em; text-transform: uppercase; }
 .hero::before { content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
   background: linear-gradient(90deg, rgba(0,0,0,.88) 0%, rgba(0,0,0,.55) 26%, rgba(0,0,0,.2) 50%, rgba(0,0,0,.55) 68%, rgba(0,0,0,.85) 100%); }
@@ -822,3 +822,6 @@ input[type=range] { accent-color: var(--red); }
 .fuel-bar { display: inline-block; width: 180px; height: 8px; border: 1px solid var(--line-c); }
 .fuel-bar i { display: block; height: 100%; background: var(--warn); transition: width 0.2s; }
 .home-btn { margin-left: 8px; }
+
+/* Front-page satellite picture (shows instantly; the live 3D model replaces it for returning players) */
+.hero-sat-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }

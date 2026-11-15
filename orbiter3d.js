@@ -2507,21 +2507,44 @@ const Orbiter3D = (() => {
 
   // ---------- Public API ----------
 
+  // The heavy files load in the background, so the first page shows right away
+  const HEAVY = [
+    ['vendor/three/OBJLoader.js', () => THREE.OBJLoader], ['vendor/three/OrbitControls.js', () => THREE.OrbitControls],
+    ['vendor/three/RoomEnvironment.js', () => THREE.RoomEnvironment], ['vendor/three/GLTFExporter.js', () => THREE.GLTFExporter],
+    ['models/orbiter-model.js', () => window.ORBITER_OBJ], ['assets/earth-textures.js', () => window.EARTH_DAY]
+  ];
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      const s = document.createElement('script'); s.src = src;
+      s.onload = res; s.onerror = () => rej(new Error(`could not load ${src}. Keep the folders next to index.html and reload the page`));
+      document.head.appendChild(s);
+    });
+  }
+  let loading = null;
+  function preload() {
+    if (!loading) {
+      loading = (typeof THREE !== 'undefined' ? Promise.resolve() : loadScript('vendor/three/three.min.js'))
+        .then(() => Promise.all(HEAVY.filter(([, has]) => !has()).map(([src]) => loadScript(src))))
+        .catch((e) => { loading = null; throw e; });
+    }
+    return loading;
+  }
   function ensure() {
     if (ready) return Promise.resolve();
-    if (!building) building = new Promise((res, rej) => setTimeout(() => {
+    if (!building) building = preload().then(() => new Promise((res, rej) => setTimeout(() => {
       try {
         if (typeof THREE === 'undefined' || !THREE.OBJLoader) throw new Error('the 3D engine did not load. Keep the vendor folder next to index.html and reload the page');
         if (!window.ORBITER_OBJ) throw new Error('the rocket model file (models/orbiter-model.js) is missing');
         build(); res();
-      } catch (e) { building = null; rej(e); }
-    }, 30));
+      } catch (e) { rej(e); }
+    }, 30))).catch((e) => { building = null; throw e; });
     return building;
   }
 
   return {
     fmtT, pOfT, tOfP, makeFlight,
-    ensure,
+    ensure, preload,
+    get ready() { return ready; },
     open(el, fl, h = {}, startP = 0) {
       leaveSat(); leaveOrbit();
       host = el; hooks = h; flight = fl;

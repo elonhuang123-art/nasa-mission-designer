@@ -96,6 +96,7 @@ function render() {
   }
   if (state.screen === 'fly') mountSatView();
   if (state.screen === 'mission') mountHeroSat();
+  if (state.screen === 'build' || state.screen === 'launch') warm3D();
   saveState();
 }
 
@@ -113,7 +114,7 @@ function renderMission() {
   const cards = MISSIONS.map((m) => {
     const best = loadBest(m.id);
     return `<button class="hcard" data-action="pick-mission" data-id="${m.id}" data-focus="pick-${m.id}" aria-label="Plan ${m.name}">
-      <span class="hthumb sat-thumb" id="hero-sat"><span class="thumb-loading">Loading your 3D satellite</span></span>
+      <span class="hthumb sat-thumb" id="hero-sat"><img class="hero-sat-img" src="assets/hero-sat.jpg" alt="An ocean satellite with unfolded solar panels, above Earth" width="438" height="240"></span>
       <span class="hcard-body">
         <span class="hcard-diff">${m.difficulty}${best ? ` \u00b7 best ${best}` : ''}</span>
         <span class="hcard-name">${m.name}</span>
@@ -719,13 +720,20 @@ function mountHeroSat() {
   const el = document.getElementById('hero-sat');
   if (!el) return;
   const m = MISSIONS[0];
-  const b = state.builds[m.id] && state.builds[m.id].instruments.length ? state.builds[m.id] : SHOWCASE_BUILD;
-  Orbiter3D.ensure().then(() => {
+  const custom = state.builds[m.id] && state.builds[m.id].instruments.length ? state.builds[m.id] : null;
+  // The picture shows instantly. Download the 3D files quietly while the player reads the page.
+  if (!custom) { whenIdle(() => Orbiter3D.preload().catch(() => {})); return; }
+  // A returning player sees their own satellite: swap the picture for the live 3D model once it is ready
+  whenIdle(() => Orbiter3D.ensure().then(() => {
     if (state.screen !== 'mission' || !document.body.contains(el)) return;
-    const ld = el.querySelector('.thumb-loading'); if (ld) ld.remove();
-    Orbiter3D.openSat(el, { mission: m, build: b, phase: 'orbit', alive: true, interactive: false, dmg: {} });
-  }).catch(() => { el.innerHTML = planetBadge(m.id, 120); });
+    Orbiter3D.openSat(el, { mission: m, build: custom, phase: 'orbit', alive: true, interactive: false, dmg: {} });
+    const img = el.querySelector('.hero-sat-img'); if (img) img.remove();
+  }).catch(() => {}));
 }
+function whenIdle(fn) { if ('requestIdleCallback' in window) requestIdleCallback(fn, { timeout: 1500 }); else setTimeout(fn, 300); }
+// Get the 3D scene ready in the background while the player designs, so the launch starts without waiting
+let warmed = false;
+function warm3D() { if (warmed) return; warmed = true; whenIdle(() => Orbiter3D.ensure().catch(() => { warmed = false; })); }
 
 // Live 3D orbit view on the flight screen: your satellite (with your parts and any damage) circling Earth
 let orbitSim = null;
