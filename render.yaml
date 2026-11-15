@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: nasa-mission-designer
+    runtime: static
+    buildCommand: echo "No build step needed"
+    staticPublishPath: .
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
