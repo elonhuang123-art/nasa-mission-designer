@@ -2468,9 +2468,65 @@ const Orbiter3D = (() => {
 
   function leaveSat() {
     if (mode !== 'sat') return;
+    finishAssembly(); asm.prev = null; if (asm.weld) asm.weld.visible = false;
     mode = 'cinematic'; controls.autoRotate = false; satView = null;
     earthMesh.visible = earthClouds.visible = atmoMesh.visible = true;
     if (planets) for (const k in planets) planets[k].visible = false;
+  }
+
+  // ---------- Build screen: each part you pick is installed on the 3D satellite ----------
+  const asm = { items: [], prev: null, sat: null, weld: null };
+  function partMap() {
+    const out = new Map();
+    [M.panels.r, M.panels.l].forEach((list, side) => list.forEach((p, i) => { if (p.piv.visible) out.set(`panel${side}_${i}`, p.piv); }));
+    if (M.dishPiv.visible) out.set('dish:' + M.dishPiv.scale.x.toFixed(2), M.dishPiv);
+    if (M.imagerPiv.visible) out.set('imager:' + M.imagerPiv.scale.x.toFixed(2), M.imagerPiv);
+    if (M.boomPiv.visible) out.set('boom', M.boomPiv);
+    const seen = {};
+    M.extra.children.forEach(c => { const n = c.name || 'part'; seen[n] = (seen[n] || 0) + 1; out.set(`x:${n}:${seen[n]}`, c); });
+    return out;
+  }
+  function finishAssembly() {
+    asm.items.forEach(it => it.obj.scale.copy(it.s0)); asm.items = [];
+    if (asm.sat) { M.sat.scale.setScalar(asm.sat.to); asm.sat = null; }
+  }
+  function startAssembly(prevScale) {
+    const now = performance.now() / 1000, parts = partMap(), first = !asm.prev;
+    let delay = first ? 0.45 : 0;
+    for (const [k, obj] of parts) {
+      if (!first && asm.prev.has(k)) continue;
+      asm.items.push({ obj, s0: obj.scale.clone(), t0: now + delay });
+      obj.scale.multiplyScalar(0.001);
+      if (first) delay += 0.14;
+    }
+    asm.prev = new Set(parts.keys());
+    const to = M.sat.scale.x;
+    if (first) asm.sat = { from: 0.001, to, t0: now };
+    else if (prevScale && Math.abs(prevScale - to) > 1e-3) asm.sat = { from: prevScale, to, t0: now };
+    if (asm.sat) M.sat.scale.setScalar(asm.sat.from);
+    if (!asm.weld) {
+      asm.weld = new THREE.Sprite(new THREE.SpriteMaterial({ map: softTex('rgba(220,245,255,1)', 'rgba(80,180,255,0)'), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, depthTest: false }));
+      asm.weld.renderOrder = 20; scene.add(asm.weld);
+    }
+  }
+  function updateAssembly(now) {
+    const back = (k) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); };
+    let glow = null, gk = 0;
+    asm.items = asm.items.filter(it => {
+      const k = clamp((now - it.t0) / 0.55, 0, 1);
+      it.obj.scale.copy(it.s0).multiplyScalar(Math.max(0.001, back(k)));
+      if (k > 0 && k < 1) { glow = it.obj; gk = k; }
+      return k < 1;
+    });
+    if (asm.sat) {
+      const k = clamp((now - asm.sat.t0) / 0.7, 0, 1);
+      M.sat.scale.setScalar(Math.max(0.001, lerp(asm.sat.from, asm.sat.to, back(k))));
+      if (k >= 1) asm.sat = null;
+    }
+    if (asm.weld) {
+      asm.weld.visible = !!glow;
+      if (glow) { glow.getWorldPosition(asm.weld.position); asm.weld.scale.setScalar(2.2 + Math.sin(now * 40) * 0.4); asm.weld.material.opacity = Math.sin(gk * Math.PI); }
+    }
   }
 
   function drawSatView(now, w, h) {
@@ -2486,6 +2542,7 @@ const Orbiter3D = (() => {
     pl.jupiter.position.copy(down).multiplyScalar(9e6).add(new THREE.Vector3(0, 0, -3e6));
     pl.europa.position.copy(down).multiplyScalar(1.5e6).add(new THREE.Vector3(2.5e6, 0, 1.2e6));
     if (!satView.alive) { const t = now / 1000; M.sat.rotation.set(t * 0.21, t * 0.13, t * 0.07); }
+    updateAssembly(now / 1000);
     const tgt = satCenter();
     camMain.position.add(tgt.clone().sub(controls.target));
     controls.target.copy(tgt);
@@ -2563,7 +2620,11 @@ const Orbiter3D = (() => {
       leaveOrbit();
       host = el; hooks = {};
       flight = makeFlight({ kind: 'orbit', lost: false }, opts.mission);
+      finishAssembly();
+      if (!opts.assemble) asm.prev = null;
+      const prevScale = M.sat.scale.x;
       applyBuild(opts.build, opts.dmg);
+      if (opts.assemble) startAssembly(prevScale);
       T = 3700; P = pOfT(T, flight.segments); playing = false;
       const wasSat = mode === 'sat';
       satView = { mission: opts.mission, phase: opts.phase, alive: opts.alive !== false };
@@ -2576,7 +2637,7 @@ const Orbiter3D = (() => {
         update(T);
         const c = satCenter();
         camMain.up.copy(localUp);
-        const zoom = opts.interactive === false ? 0.68 : 1;   // a closer look for the small front-page card
+        const zoom = opts.zoom || (opts.interactive === false ? 0.68 : 1);   // a closer look for the small front-page card
         camMain.position.copy(c).add(localUp.clone().multiplyScalar(4 * zoom)).add(new THREE.Vector3(0, 0, 14 * zoom)).add(new THREE.Vector3(localUp.y, -localUp.x, 0).multiplyScalar(6 * zoom));
         controls.target.copy(c); controls.update();
       }
@@ -2650,6 +2711,7 @@ const Orbiter3D = (() => {
     fireDeorbit() { return OV ? fireDeorbit() : null; },
     steer(dir, on) { if (OV && dir in OV.keys) OV.keys[dir] = !!on; },
     _ov: () => OV,
+    _asm: () => ({ items: asm.items.length, minScale: asm.items.reduce((m, it) => Math.min(m, it.obj.scale.x), 9), sat: !!asm.sat }),
     _step(ms) { if (OV && host && mode === 'orbitview') drawOrbitView(((OV.last || 0) * 1000) + ms); },
     close() {
       leaveSat(); leaveOrbit();

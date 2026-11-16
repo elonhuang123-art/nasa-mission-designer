@@ -96,12 +96,13 @@ function render() {
   }
   if (state.screen === 'fly') mountSatView();
   if (state.screen === 'mission') mountHeroSat();
+  if (state.screen === 'build') mountBuildSat();
   if (state.screen === 'build' || state.screen === 'launch') warm3D();
   saveState();
 }
 
 function go(screen) {
-  if (['liftoff', 'fly', 'mission'].includes(state.screen) && screen !== state.screen) Orbiter3D.close();
+  if (['liftoff', 'fly', 'mission', 'build'].includes(state.screen) && screen !== state.screen) Orbiter3D.close();
   state.screen = screen;
   render();
   window.scrollTo({ top: 0 });
@@ -241,7 +242,11 @@ function statusPanel(a) {
   const warns = warnings(a, m);
   const blocked = warns.some(w => w.level === 'block');
 
-  return `<div class="craft-frame">${drawCraft(b)}</div>
+  return `<div class="build3d" id="build3d" aria-label="Your satellite in 3D. Parts appear as you choose them.">
+      <div class="craft-frame b3-flat">${drawCraft(b)}</div>
+      <span class="b3-cap" id="b3-cap" aria-live="polite"></span>
+      <span class="b3-help">Drag to turn it \u00b7 scroll to zoom</span>
+    </div>
     <div class="potential"><span>Science potential</span><strong>${pot}<small>/100</small></strong></div>
     <ul class="goals">${objectiveScores(m, b.instruments).map(o =>
       `<li><span class="goal-bar"><span style="width:${o.coverage * 100}%"></span></span>${o.name}<em>${o.weight}</em></li>`).join('')}</ul>
@@ -730,6 +735,36 @@ function mountHeroSat() {
     const img = el.querySelector('.hero-sat-img'); if (img) img.remove();
   }).catch(() => {}));
 }
+// Build screen: the live 3D satellite. Each part you choose is installed on it with a short animation.
+let lastBuildSnap = null;
+function partNames(b) {
+  const nm = (list, id) => { const x = list.find(o => o.id === id); return x ? x.name : id; };
+  const out = new Set(b.instruments.map(i => nm(INSTRUMENTS, i)));
+  out.add(`${nm(BUSES, b.bus)}`); if (b.solar !== 'none') out.add(`${nm(SOLAR, b.solar)} solar panels`);
+  out.add(nm(ANTENNAS, b.antenna)); if (b.engine !== 'none') out.add(nm(ENGINES, b.engine));
+  if (b.rtg) out.add(`${b.rtg} nuclear power unit${b.rtg > 1 ? 's' : ''}`);
+  return out;
+}
+function mountBuildSat() {
+  const el = document.getElementById('build3d');
+  if (!el) return;
+  const b = JSON.parse(JSON.stringify(build()));
+  const now = partNames(b), before = lastBuildSnap;
+  lastBuildSnap = now;
+  const added = before ? [...now].filter(n => !before.has(n)) : [];
+  const removed = before ? [...before].filter(n => !now.has(n)) : [];
+  const cap = document.getElementById('b3-cap');
+  if (cap && (added.length || removed.length)) {
+    cap.textContent = added.length ? `Installing: ${added.join(', ')}` : `Removed: ${removed.join(', ')}`;
+    cap.classList.add('show'); clearTimeout(mountBuildSat.t); mountBuildSat.t = setTimeout(() => { const c = document.getElementById('b3-cap'); if (c) c.classList.remove('show'); }, 1800);
+  }
+  Orbiter3D.ensure().then(() => {
+    if (state.screen !== 'build' || !document.body.contains(el)) return;
+    Orbiter3D.openSat(el, { mission: state.mission, build: b, phase: 'orbit', alive: true, interactive: true, dmg: {}, assemble: true, zoom: 0.62 });
+    const flat = el.querySelector('.b3-flat'); if (flat) flat.remove();
+  }).catch(() => {});
+}
+
 function whenIdle(fn) { if ('requestIdleCallback' in window) requestIdleCallback(fn, { timeout: 1500 }); else setTimeout(fn, 300); }
 // Get the 3D scene ready in the background while the player designs, so the launch starts without waiting
 let warmed = false;

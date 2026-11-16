@@ -825,3 +825,14 @@ input[type=range] { accent-color: var(--red); }
 
 /* Front-page satellite picture (shows instantly; the live 3D model replaces it for returning players) */
 .hero-sat-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Build screen: live 3D satellite */
+.build3d { position: relative; height: 320px; background: #03060d; border: 1px solid var(--line-c); overflow: hidden; }
+.build3d .b3-flat { position: absolute; inset: 0; border: 0; }
+.build3d .orb-gl { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.build3d .orb-gl:active { cursor: grabbing; }
+.b3-cap { position: absolute; left: 10px; top: 10px; right: 10px; z-index: 2; pointer-events: none; font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--red);
+  background: rgba(6, 10, 19, 0.82); border-left: 2px solid var(--red); padding: 5px 8px; opacity: 0; transform: translateY(-4px); transition: opacity 0.25s, transform 0.25s; }
+.b3-cap.show { opacity: 1; transform: none; }
+.b3-help { position: absolute; right: 10px; bottom: 8px; z-index: 2; pointer-events: none; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; }
+@media (max-width: 760px) { .build3d { height: 260px; } }
