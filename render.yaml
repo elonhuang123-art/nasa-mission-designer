@@ -8,3 +8,7 @@ services:
       - path: /*
         name: X-Content-Type-Options
         value: nosniff
+      # always check for the newest version, so visitors get updates right after a push
+      - path: /*
+        name: Cache-Control
+        value: no-cache
