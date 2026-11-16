@@ -2300,7 +2300,7 @@ const Orbiter3D = (() => {
     const v = p.clone().project(cam);
     if (hidden || v.z > 1 || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) { el.style.display = 'none'; return; }
     el.style.display = '';
-    el.style.transform = `translate(${((v.x + 1) / 2 * w).toFixed(1)}px, ${((1 - v.y) / 2 * h).toFixed(1)}px)`;
+    placeLabel(el, (v.x + 1) / 2 * w, (1 - v.y) / 2 * h, w, h, 'right');
     OV.labelUsed[key] = true;
   }
 
@@ -2473,6 +2473,18 @@ const Orbiter3D = (() => {
     mode = 'cinematic'; controls.autoRotate = false; satView = null;
     earthMesh.visible = earthClouds.visible = atmoMesh.visible = true;
     if (planets) for (const k in planets) planets[k].visible = false;
+  }
+
+  // Put a label beside a screen point, on the side that has room, and keep it fully inside the frame
+  function placeLabel(el, x, y, w, h, prefer) {
+    const lw = el.offsetWidth, lh = el.offsetHeight, gap = 12, pad = 4;
+    let left = prefer === 'left' ? x - gap - lw : x + gap;
+    if (left + lw > w - pad) left = x - gap - lw;      // no room on the right: flip to the left
+    if (left < pad) left = x + gap;                     // no room on the left: flip to the right
+    left = clamp(left, pad, Math.max(pad, w - lw - pad));
+    const top = clamp(y - lh / 2, pad, Math.max(pad, h - lh - pad));
+    el.style.transform = `translate(${left.toFixed(1)}px, ${top.toFixed(1)}px)`;
+    el.classList.toggle('on-left', left < x);
   }
 
   // ---------- Your rocket: built from the Rocket Designer settings ----------
@@ -2680,8 +2692,7 @@ const Orbiter3D = (() => {
     if (!el) { el = RV.labels[key] = document.createElement('div'); el.className = 'rk-label ' + key; RV.labelBox.appendChild(el); }
     if (el.textContent !== text) el.textContent = text;
     const v = p.clone().project(RV.cam), w = host.clientWidth, h = host.clientHeight;
-    const x = ((v.x + 1) / 2 * w).toFixed(1), y = ((1 - v.y) / 2 * h).toFixed(1);
-    el.style.transform = key === 'cp' ? `translate(calc(${x}px - 100%), ${y}px)` : `translate(${x}px, ${y}px)`;
+    placeLabel(el, (v.x + 1) / 2 * w, (1 - v.y) / 2 * h, w, h, key === 'cp' ? 'left' : 'right');
   }
   function drawRocketView(nowMs) {
     const now = nowMs / 1000, w = host.clientWidth, h = host.clientHeight;
