@@ -1706,6 +1706,7 @@ const Orbiter3D = (() => {
   function frame(now) {
     raf = requestAnimationFrame(frame);
     if (mode === 'orbitview' && host) { drawOrbitView(now); return; }
+    if (mode === 'rocketview' && host) { drawRocketView(now); return; }
     if (!flight || !host) return;
     const dt = Math.max(0, Math.min(0.1, (now - lastNow) / 1000)); lastNow = Math.max(lastNow, now);
     if (playing) {
@@ -2474,6 +2475,230 @@ const Orbiter3D = (() => {
     if (planets) for (const k in planets) planets[k].visible = false;
   }
 
+  // ---------- Your rocket: built from the Rocket Designer settings ----------
+  // Same overall size as the ORBITER-1 model (1 unit = 2.4 m), so every launch camera shot still frames it.
+  const RK = { R: 0.9, FR: 1.3, FAIR_BASE: 21.4, CYL: 4.0 };
+  function rocketLayout(n) {
+    if (n === 1) return { tanks: [[0, 21.4]], inter: [], bells: [] , s2FlameY: 21.35 };
+    if (n === 2) return { tanks: [[0, 15.0], [17.2, 21.4]], inter: [[15.0, 17.2]], bells: [[15.08, 1.45]], s2FlameY: 15.08 };
+    return { tanks: [[0, 12.2], [13.9, 17.6], [18.5, 21.4]], inter: [[12.2, 13.9], [17.6, 18.5]], bells: [[12.3, 1.45], [17.62, 0.8]], s2FlameY: 12.3 };
+  }
+  function engineLayout(N) {
+    const pts = [], ring = (count, r, a0 = 0) => { for (let i = 0; i < count; i++) { const a = a0 + i / count * Math.PI * 2; pts.push([Math.cos(a) * r, Math.sin(a) * r]); } };
+    let rb;
+    if (N === 1) { pts.push([0, 0]); rb = 0.42; }
+    else if (N <= 4) { ring(N, 0.42, Math.PI / 4); rb = 0.3; }
+    else if (N <= 9) { pts.push([0, 0]); ring(N - 1, 0.6); rb = N <= 7 ? 0.24 : 0.19; }
+    else { pts.push([0, 0]); const inner = 6; ring(inner, 0.33); ring(N - 1 - inner, 0.68, 0.2); rb = Math.min(0.15, Math.PI * 0.68 / (N - 1 - inner) * 0.85); }
+    return { pts, rb };
+  }
+  function noseProfile(type) {
+    const R = RK.FR, out = [];
+    const L = type === 'blunt' ? 1.5 : type === 'conical' ? 3.4 : 3.7;
+    for (let i = 0; i <= 24; i++) {
+      const h = i / 24 * L;
+      let r;
+      if (type === 'conical') r = R * (1 - h / L);
+      else if (type === 'blunt') r = R * Math.sqrt(Math.max(0, 1 - Math.pow(h / L, 2)));
+      else { const rho = (R * R + L * L) / (2 * R); r = Math.sqrt(Math.max(0, rho * rho - h * h)) + R - rho; }   // tangent ogive
+      out.push(new THREE.Vector2(Math.max(0, r), RK.CYL + h));
+    }
+    return { pts: out, L };
+  }
+  let RKMAT = null;
+  function rocketMats() {
+    if (RKMAT) return RKMAT;
+    const MA = M.MATS;
+    RKMAT = {
+      white: MA.white_paint, black: MA.carbon_black, seam: MA.seam_gray, red: MA.accent_red, nozzle: MA.nozzle_dark, copper: MA.copper, ti: MA.titanium,
+      steel: new THREE.MeshStandardMaterial({ name: 'stainless_steel', color: 0xc9cdd3, roughness: 0.26, metalness: 1 }),
+      fair: MA.white_paint.clone()
+    };
+    RKMAT.fair.side = THREE.DoubleSide;
+    return RKMAT;
+  }
+  // Builds every visible part of the rocket. Each part is a group anchored at its base, so it can grow upward.
+  function makeRocketParts(d) {
+    const mt = rocketMats(), L = rocketLayout(d.stages), parts = new Map();
+    const s1 = new THREE.Group(), s2 = new THREE.Group();
+    s1.name = 'your_rocket_stage_1'; s2.name = 'your_rocket_upper_stages';
+    const body = d.fuelType === 'methane' ? mt.steel : mt.white;
+    const part = (key, parent, y) => { const g = new THREE.Group(); g.position.y = y; g.name = key; parent.add(g); parts.set(key, { g, kind: 'grow' }); return g; };
+    const mesh = (geo, mat, g, y, name) => { const m = new THREE.Mesh(geo, mat); m.position.y = y; m.name = name || ''; m.castShadow = m.receiveShadow = true; g.add(m); return m; };
+    // engines
+    const E = engineLayout(d.engines), thrustK = clamp(0.85 + d.thrust / 7000, 0.85, 1.15);
+    const bellPts = []; for (let i = 0; i <= 12; i++) { const t = i / 12; bellPts.push(new THREE.Vector2(0.42 + 0.58 * Math.pow(t, 0.7), -t * 0.72)); }
+    const bellGeo = new THREE.LatheGeometry(bellPts, 28);
+    const engines = [];
+    E.pts.forEach(([x, z], i) => {
+      const g = new THREE.Group(); g.position.set(x, -0.59, z); g.name = 'engine_' + (i + 1); s1.add(g);
+      const rb = E.rb * thrustK;
+      const bell = new THREE.Mesh(bellGeo, mt.nozzle); bell.scale.set(rb, 1, rb); g.add(bell);
+      const ch = new THREE.Mesh(new THREE.CylinderGeometry(rb * 0.42, rb * 0.5, 0.2, 18), mt.copper); ch.position.y = 0.1; g.add(ch);
+      parts.set('eng:' + i, { g, kind: 'pop' });
+      engines.push({ x, z, rb });
+    });
+    // thrust structure under stage 1
+    const thr = part('thrust_structure', s1, -0.5);
+    mesh(new THREE.CylinderGeometry(RK.R * 0.97, RK.R * 0.92, 0.5, 40), mt.black, thr, 0.25, 'thrust_structure');
+    // stage tanks, with stiffening rings (more for a stronger structure)
+    const rings = { light: 1, standard: 2, heavy: 4 }[d.strength] || 2;
+    L.tanks.forEach(([y0, y1], k) => {
+      const g = part(`tank:${k}:${d.fuelType}:${d.stages}`, k === 0 ? s1 : s2, y0), h = y1 - y0;
+      mesh(new THREE.CylinderGeometry(RK.R, RK.R, h, 48), body, g, h / 2, `stage_${k + 1}_tank`);
+      if (k === 0 && d.fuelType !== 'methane') mesh(new THREE.CylinderGeometry(RK.R + 0.004, RK.R + 0.004, 0.35, 48), mt.black, g, 0.6, 'base_band');
+      if (d.fuelType === 'solid') for (let j = 1; j < 4; j++) mesh(new THREE.CylinderGeometry(RK.R + 0.02, RK.R + 0.02, 0.12, 48), mt.seam, g, h * j / 4, 'segment_joint');
+      for (let j = 1; j <= rings; j++) mesh(new THREE.CylinderGeometry(RK.R + 0.012, RK.R + 0.012, 0.05, 48), d.fuelType === 'methane' ? mt.seam : mt.ti, g, h * j / (rings + 1), 'stiffener');
+      if (k === 0) mesh(new THREE.CylinderGeometry(RK.R + 0.006, RK.R + 0.006, 0.22, 48), mt.red, g, h - 1.2, 'stripe');
+    });
+    // interstages (dark, like carbon) with the upper-stage engine bell inside
+    L.inter.forEach(([y0, y1], k) => {
+      const g = part(`inter:${k}:${d.stages}`, k === 0 ? s1 : s2, y0);
+      const m = mesh(new THREE.CylinderGeometry(RK.R, RK.R, y1 - y0, 48, 1, true), d.fuelType === 'methane' ? mt.steel : mt.black, g, (y1 - y0) / 2, 'interstage');
+      m.material = m.material.clone(); m.material.side = THREE.DoubleSide;
+    });
+    L.bells.forEach(([y0, h], k) => {
+      const g = part(`vac:${k}:${d.stages}`, s2, y0);
+      const vb = new THREE.Mesh(new THREE.LatheGeometry(bellPts.map(p => new THREE.Vector2(p.x * 0.75, h + p.y * (h / 0.72))), 32), mt.nozzle); vb.scale.set(0.95, 1, 0.95); g.add(vb);
+      parts.get(`vac:${k}:${d.stages}`).kind = 'pop';
+    });
+    // payload adapter
+    const pa = part('adapter', s2, 21.4);
+    mesh(new THREE.CylinderGeometry(0.6, RK.R, 0.5, 40), mt.ti, pa, 0.25, 'payload_adapter');
+    // fins at the base (they move the center of pressure down and keep the rocket stable)
+    const span = [0, 0.55, 0.9, 1.3][d.fins] || 0, root = [0, 1.6, 2.3, 3.0][d.fins] || 0;
+    if (span > 0) for (let i = 0; i < 4; i++) {
+      const sh = new THREE.Shape();
+      sh.moveTo(0, 0); sh.lineTo(span, 0.05); sh.lineTo(span, root * 0.4); sh.lineTo(0, root); sh.lineTo(0, 0);
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.07, bevelEnabled: false }); geo.translate(0, 0, -0.035);
+      const g = new THREE.Group(); g.position.set(0, 0.05, 0); g.rotation.y = i * Math.PI / 2 + Math.PI / 4; g.name = 'fin_' + (i + 1); s1.add(g);
+      const m = new THREE.Mesh(geo, d.fuelType === 'methane' ? mt.steel : mt.black); m.position.x = RK.R - 0.02; m.castShadow = true; g.add(m);
+      parts.set(`fin:${i}:${d.fins}`, { g, kind: 'pop' });
+    }
+    // fairing halves: a cylinder around the satellite, topped with your nose shape
+    const nose = noseProfile(d.nose);
+    const prof = [new THREE.Vector2(RK.FR, 0), new THREE.Vector2(RK.FR, RK.CYL)].concat(nose.pts.slice(1));
+    const halves = [0, Math.PI].map((phi, i) => {
+      const geo = new THREE.LatheGeometry(prof, 40, phi, Math.PI); geo.translate(0, RK.FAIR_BASE, 0);
+      const m = new THREE.Mesh(geo, mt.fair); m.name = i === 0 ? 'fairing_right' : 'fairing_left'; m.castShadow = true;
+      return m;
+    });
+    const noseTop = RK.FAIR_BASE + RK.CYL + nose.L;
+    return { s1, s2, halves, engines, parts, s2FlameY: L.s2FlameY, noseTop, noseKey: `nose:${d.nose}` };
+  }
+
+  // Swap the launch rocket for the one you designed (the satellite on top stays the same)
+  function applyRocket(d) {
+    if (!M) return;
+    if (!M.orig) {
+      M.orig = { flames: M.s1Flames.slice(), meshes: [] };
+      for (const g of [M.s1, M.s2, M.fairL, M.fairR]) g.traverse(o => { if (o.isMesh && o.userData.c) M.orig.meshes.push(o); });
+    }
+    if (M.custom) {
+      for (const [p, c] of M.custom.attach) p.remove(c);
+      M.custom.flames.forEach(f => M.model.remove(f));
+      M.custom = null;
+    }
+    const useOrig = !d;
+    M.orig.meshes.forEach(o => { o.visible = useOrig; });
+    M.orig.flames.forEach(f => { if (useOrig) { if (!f.parent) M.model.add(f); } else M.model.remove(f); });
+    if (useOrig) { M.s1Flames = M.orig.flames; M.s2Flame.position.y = M.s2Core.position.y = 15.08; return; }
+    const R = makeRocketParts(d), attach = [];
+    M.s1.add(R.s1); attach.push([M.s1, R.s1]);
+    M.s2.add(R.s2); attach.push([M.s2, R.s2]);
+    R.halves[0].position.copy(M.fairR.userData.origin).negate(); M.fairR.add(R.halves[0]); attach.push([M.fairR, R.halves[0]]);
+    R.halves[1].position.copy(M.fairL.userData.origin).negate(); M.fairL.add(R.halves[1]); attach.push([M.fairL, R.halves[1]]);
+    const plumeGeo = M.orig.flames[0].geometry, flames = [];
+    for (const e of R.engines) {
+      const k = e.rb / 0.19;
+      const f = new THREE.Mesh(plumeGeo, M.flameMat); f.position.set(e.x, -1.31, e.z); f.scale.set(k, 1, k); f.frustumCulled = false; f.renderOrder = 5;
+      const c = new THREE.Mesh(plumeGeo, M.coreMat); c.position.set(e.x, -1.31, e.z); c.scale.set(k, 1, k); c.frustumCulled = false; c.renderOrder = 6;
+      M.model.add(f, c); flames.push(f, c);
+    }
+    M.s1Flames = flames;
+    M.s2Flame.position.y = M.s2Core.position.y = R.s2FlameY;
+    M.custom = { attach, flames };
+  }
+
+  // ---------- Rocket Designer: a 3D preview that builds itself as you design ----------
+  let RV = null;
+  const rasm = { items: [], prev: null };
+  function markerTex(kind) {
+    return canvasTex(128, 128, (g) => {
+      if (kind === 'cm') {
+        g.fillStyle = '#ffffff'; g.beginPath(); g.arc(64, 64, 52, 0, 7); g.fill();
+        g.fillStyle = '#111'; g.beginPath(); g.moveTo(64, 64); g.arc(64, 64, 52, -Math.PI / 2, 0); g.fill();
+        g.beginPath(); g.moveTo(64, 64); g.arc(64, 64, 52, Math.PI / 2, Math.PI); g.fill();
+        g.strokeStyle = '#111'; g.lineWidth = 6; g.beginPath(); g.arc(64, 64, 52, 0, 7); g.stroke();
+      } else {
+        g.strokeStyle = '#ff5d4d'; g.lineWidth = 12; g.beginPath(); g.arc(64, 64, 46, 0, 7); g.stroke();
+        g.fillStyle = '#ff5d4d'; g.beginPath(); g.arc(64, 64, 16, 0, 7); g.fill();
+      }
+    });
+  }
+  function buildRocketView() {
+    RV = { scene: new THREE.Scene(), cam: new THREE.PerspectiveCamera(30, 1, 0.1, 3000), group: null };
+    RV.scene.environment = scene.environment;
+    RV.scene.background = new THREE.Color(0x03060d);
+    const key = new THREE.DirectionalLight(0xffffff, 2.4); key.position.set(20, 40, 25);
+    const rim = new THREE.DirectionalLight(0x7fc8ff, 1.2); rim.position.set(-25, 18, -20);
+    RV.scene.add(key, rim, new THREE.AmbientLight(0x404a60, 0.6));
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(7, 7.4, 0.6, 64), new THREE.MeshStandardMaterial({ color: 0x1a2232, roughness: 0.85, metalness: 0.2 }));
+    pad.position.y = -1.65; RV.scene.add(pad);
+    const grid = new THREE.GridHelper(40, 40, 0x1f4a6a, 0x13263a); grid.position.y = -1.95; RV.scene.add(grid);
+    RV.cm = new THREE.Sprite(new THREE.SpriteMaterial({ map: markerTex('cm'), depthTest: false, transparent: true }));
+    RV.cp = new THREE.Sprite(new THREE.SpriteMaterial({ map: markerTex('cp'), depthTest: false, transparent: true }));
+    RV.cm.scale.setScalar(1.5); RV.cp.scale.setScalar(1.3); RV.cm.renderOrder = RV.cp.renderOrder = 30;
+    RV.scene.add(RV.cm, RV.cp);
+    RV.cam.position.set(30, 22, 52);
+    RV.controls = new THREE.OrbitControls(RV.cam, renderer.domElement);
+    Object.assign(RV.controls, { enabled: false, enableDamping: true, enablePan: false, minDistance: 18, maxDistance: 110, autoRotate: true, autoRotateSpeed: 1.1 });
+    RV.controls.target.set(0, 13.5, 0); RV.controls.update();
+  }
+  function rocketAssemble(parts, first) {
+    const now = performance.now() / 1000;
+    let delay = first ? 0.2 : 0;
+    for (const [k, p] of parts) {
+      if (!first && rasm.prev && rasm.prev.has(k)) continue;
+      rasm.items.push({ g: p.g, kind: p.kind, s0: p.g.scale.clone(), t0: now + delay });
+      if (p.kind === 'grow') p.g.scale.y = 0.001; else p.g.scale.setScalar(0.001);
+      if (first) delay += p.kind === 'pop' ? 0.06 : 0.22;
+    }
+    rasm.prev = new Set(parts.keys());
+  }
+  function rocketAssembleTick(now) {
+    const back = (k) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); };
+    rasm.items = rasm.items.filter(it => {
+      const k = clamp((now - it.t0) / (it.kind === 'grow' ? 0.5 : 0.45), 0, 1);
+      if (it.kind === 'grow') it.g.scale.y = Math.max(0.001, it.s0.y * (1 - Math.pow(1 - k, 3)));
+      else it.g.scale.copy(it.s0).multiplyScalar(Math.max(0.001, back(k)));
+      return k < 1;
+    });
+  }
+  function rocketLabel(key, text, p) {
+    let el = RV.labels[key];
+    if (!el) { el = RV.labels[key] = document.createElement('div'); el.className = 'rk-label ' + key; RV.labelBox.appendChild(el); }
+    if (el.textContent !== text) el.textContent = text;
+    const v = p.clone().project(RV.cam), w = host.clientWidth, h = host.clientHeight;
+    const x = ((v.x + 1) / 2 * w).toFixed(1), y = ((1 - v.y) / 2 * h).toFixed(1);
+    el.style.transform = key === 'cp' ? `translate(calc(${x}px - 100%), ${y}px)` : `translate(${x}px, ${y}px)`;
+  }
+  function drawRocketView(nowMs) {
+    const now = nowMs / 1000, w = host.clientWidth, h = host.clientHeight;
+    rocketAssembleTick(now);
+    RV.controls.update();
+    RV.cam.aspect = w / h; RV.cam.updateProjectionMatrix();
+    renderer.setScissorTest(false); renderer.setViewport(0, 0, w, h);
+    renderer.render(RV.scene, RV.cam);
+    if (RV.labelBox) { rocketLabel('cm', 'Center of mass', RV.cm.position); rocketLabel('cp', 'Center of pressure', RV.cp.position); }
+  }
+  function leaveRocket() {
+    if (mode !== 'rocketview') return;
+    mode = 'cinematic'; RV.controls.enabled = false;
+    rasm.items.forEach(it => it.g.scale.copy(it.s0)); rasm.items = []; rasm.prev = null;
+    if (RV.labelBox && RV.labelBox.parentNode) RV.labelBox.parentNode.removeChild(RV.labelBox);
+  }
+
   // ---------- Build screen: each part you pick is installed on the 3D satellite ----------
   const asm = { items: [], prev: null, sat: null, weld: null };
   function partMap() {
@@ -2603,9 +2828,10 @@ const Orbiter3D = (() => {
     ensure, preload,
     get ready() { return ready; },
     open(el, fl, h = {}, startP = 0) {
-      leaveSat(); leaveOrbit();
+      leaveSat(); leaveOrbit(); leaveRocket();
       host = el; hooks = h; flight = fl;
       applyBuild(fl.build, {});
+      applyRocket(fl.design || null);      // the rocket you designed
       P = clamp(startP, 0, fl.pMax); T = tOfP(P, fl.segments);
       host.appendChild(renderer.domElement);
       renderer.domElement.className = 'orb-gl';
@@ -2617,7 +2843,7 @@ const Orbiter3D = (() => {
     },
     openSat(el, opts) {
       const fresh = host !== el;
-      leaveOrbit();
+      leaveOrbit(); leaveRocket();
       host = el; hooks = {};
       flight = makeFlight({ kind: 'orbit', lost: false }, opts.mission);
       finishAssembly();
@@ -2647,7 +2873,7 @@ const Orbiter3D = (() => {
     },
     openOrbit(el, opts) {
       const fresh = host !== el;
-      leaveSat();
+      leaveSat(); leaveRocket();
       host = el; hooks = { onTick: opts.onTick };
       if (!OV) buildOrbitView();
       if (opts.reset) {
@@ -2697,6 +2923,33 @@ const Orbiter3D = (() => {
       if (mode !== 'orbitview') { mode = 'orbitview'; controls.enabled = false; }
       lastNow = performance.now(); cancelAnimationFrame(raf); raf = requestAnimationFrame(frame);
     },
+    // Rocket Designer preview: your rocket in 3D, built part by part as you change the design
+    openRocket(el, opts) {
+      const fresh = host !== el;
+      leaveSat(); leaveOrbit();
+      host = el; hooks = {};
+      if (!RV) buildRocketView();
+      rasm.items.forEach(it => it.g.scale.copy(it.s0)); rasm.items = [];
+      if (RV.group) RV.scene.remove(RV.group);
+      const R = makeRocketParts(opts.design);
+      const fg = new THREE.Group(); fg.position.y = RK.FAIR_BASE; fg.name = 'fairing';
+      R.halves.forEach(hm => { hm.position.y = -RK.FAIR_BASE; fg.add(hm); });
+      R.parts.set(R.noseKey, { g: fg, kind: 'grow' });
+      const g = new THREE.Group(); g.add(R.s1, R.s2, fg); RV.group = g; RV.scene.add(g);
+      rocketAssemble(R.parts, mode !== 'rocketview' || !rasm.prev);
+      RV.cm.position.set(0, clamp(opts.cm || 0.4, 0, 1) * R.noseTop, 0);
+      RV.cp.position.set(0, clamp(opts.cp || 0.3, 0, 1) * R.noseTop, 0);
+      if (fresh) {
+        host.appendChild(renderer.domElement); renderer.domElement.className = 'orb-gl';
+        window.removeEventListener('resize', resize); window.addEventListener('resize', resize);
+      }
+      if (!RV.labelBox) { RV.labelBox = document.createElement('div'); RV.labelBox.className = 'rk-labels'; RV.labels = {}; }
+      if (RV.labelBox.parentNode !== host) host.appendChild(RV.labelBox);
+      resize();
+      if (mode !== 'rocketview') { mode = 'rocketview'; controls.enabled = false; RV.controls.enabled = true; }
+      lastNow = performance.now(); cancelAnimationFrame(raf); raf = requestAnimationFrame(frame);
+    },
+    _rasm: () => ({ items: rasm.items.length, parts: rasm.prev ? rasm.prev.size : 0 }),
     orbitWarp(w) { if (OV) { OV.warp = w; if (!OV.land || OV.land.stage === 'aim') OV.autoWarp = null; } },
     orbitView(v) { if (OV) viewPreset(v); },
     orbitZoom(dir) { if (OV) orbitZoomBy(dir === 'in' ? -1.2 : 1.2); },
@@ -2714,7 +2967,7 @@ const Orbiter3D = (() => {
     _asm: () => ({ items: asm.items.length, minScale: asm.items.reduce((m, it) => Math.min(m, it.obj.scale.x), 9), sat: !!asm.sat }),
     _step(ms) { if (OV && host && mode === 'orbitview') drawOrbitView(((OV.last || 0) * 1000) + ms); },
     close() {
-      leaveSat(); leaveOrbit();
+      leaveSat(); leaveOrbit(); leaveRocket();
       if (FX) FX.magForced = false;
       cancelAnimationFrame(raf); playing = false;
       window.removeEventListener('resize', resize);

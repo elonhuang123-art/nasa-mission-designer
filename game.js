@@ -53,11 +53,8 @@ function restoreState() {
   state.designs = data.designs || {};
   if (!state.builds[state.mission.id]) state.builds[state.mission.id] = defaultBuild();
   if (!state.designs[state.mission.id]) state.designs[state.mission.id] = designDefaults();
-  if (data.screen === 'liftoff' && data.flight) {
-    startFlight(data.flight.kind, data.flight.outcome, data.flight.P);
-    return true;
-  }
-  state.screen = ['build', 'launch'].includes(data.screen) ? data.screen : data.screen === 'mission' ? 'mission' : 'build';
+  // The game always opens on the mission page. Your spacecraft and rocket designs are kept.
+  state.screen = 'mission';
   return true;
 }
 
@@ -97,12 +94,13 @@ function render() {
   if (state.screen === 'fly') mountSatView();
   if (state.screen === 'mission') mountHeroSat();
   if (state.screen === 'build') mountBuildSat();
+  if (state.screen === 'launch') mountRocket();
   if (state.screen === 'build' || state.screen === 'launch') warm3D();
   saveState();
 }
 
 function go(screen) {
-  if (['liftoff', 'fly', 'mission', 'build'].includes(state.screen) && screen !== state.screen) Orbiter3D.close();
+  if (['liftoff', 'fly', 'mission', 'build', 'launch'].includes(state.screen) && screen !== state.screen) Orbiter3D.close();
   state.screen = screen;
   render();
   window.scrollTo({ top: 0 });
@@ -378,7 +376,10 @@ function designerLive(a) {
       <p>Try this design in 3D as many times as you like. Test flights cost nothing and don’t use your budget.</p>
     </div>
     <div class="d-live-grid">
-      <div class="diagram-frame">${rocketDiagram(a)}</div>
+      <div class="diagram-frame rk3d" id="rk3d" aria-label="Your rocket in 3D. It changes as you edit the design.">
+        <div class="rk-flat">${rocketDiagram(a)}</div>
+        <span class="b3-cap" id="rk-cap" aria-live="polite"></span>
+      </div>
       <div class="checks">
         ${meter('Thrust-to-weight', `${a.twr.toFixed(2)} (needs above 1)`, a.twr, 1.2, { higherIsBetter: true })}
         ${meter('Delta-v', `${a.dv.toFixed(1)} of ${a.needed.toFixed(1)} km/s`, a.dv, a.needed, { higherIsBetter: true, mark: m.id !== 'earth' ? a.needOrbit / a.needed : 0 })}
@@ -765,6 +766,36 @@ function mountBuildSat() {
   }).catch(() => {});
 }
 
+// Rocket Designer: the live 3D rocket, built part by part
+let lastDesignSnap = null;
+function designChange(a, b) {
+  if (!a) return '';
+  if (b.stages !== a.stages) return b.stages > a.stages ? `Stacking stage ${b.stages}` : `Removing stage ${a.stages}`;
+  if (b.engines !== a.engines) return b.engines > a.engines ? `Adding engines: ${b.engines} on stage 1` : `Removing engines: ${b.engines} on stage 1`;
+  if (b.fins !== a.fins) return b.fins ? `Fitting ${FINS[b.fins].name.toLowerCase()} fins` : 'Fins removed';
+  if (b.nose !== a.nose) return `Nose cone: ${NOSES[b.nose].name.toLowerCase()}`;
+  if (b.fuelType !== a.fuelType) return `New tanks for ${FUELS[b.fuelType].name}`;
+  if (b.strength !== a.strength) return `Structure: ${STRENGTH[b.strength].name.toLowerCase()}`;
+  return '';
+}
+function mountRocket() {
+  const el = document.getElementById('rk3d');
+  if (!el) return;
+  const d = JSON.parse(JSON.stringify(design())), a = rocketAnalysis();
+  const msg = designChange(lastDesignSnap, d);
+  lastDesignSnap = d;
+  const cap = document.getElementById('rk-cap');
+  if (cap && msg) {
+    cap.textContent = msg; cap.classList.add('show');
+    clearTimeout(mountRocket.t); mountRocket.t = setTimeout(() => { const c = document.getElementById('rk-cap'); if (c) c.classList.remove('show'); }, 1800);
+  }
+  Orbiter3D.ensure().then(() => {
+    if (state.screen !== 'launch' || !document.body.contains(el)) return;
+    Orbiter3D.openRocket(el, { design: d, cm: a.cm, cp: a.cp });
+    const flat = el.querySelector('.rk-flat'); if (flat) flat.remove();
+  }).catch(() => {});
+}
+
 function whenIdle(fn) { if ('requestIdleCallback' in window) requestIdleCallback(fn, { timeout: 1500 }); else setTimeout(fn, 300); }
 // Get the 3D scene ready in the background while the player designs, so the launch starts without waiting
 let warmed = false;
@@ -924,6 +955,7 @@ function startFlight(kind, presetOutcome, startP) {
   const outcome = presetOutcome || rollOutcome(analysis, m);
   const plan = Orbiter3D.makeFlight(outcome, m);
   plan.build = JSON.parse(JSON.stringify(build()));   // the 3D satellite shows the parts you picked
+  plan.design = JSON.parse(JSON.stringify(design())); // and the 3D rocket is the one you designed
   state.flight = { kind, outcome, analysis, plan, startP: startP || 0, autoplay: !presetOutcome };
   if (kind === 'mission' && !['scrub', 'nothrust'].includes(outcome.kind)) {
     const rocket = { name: 'your rocket', cost: analysis.cost, outcome, analysis };
@@ -1077,12 +1109,14 @@ document.addEventListener('input', (e) => {
     build().fuel = Number(t.value);
     $('#fuel-out').textContent = kg(build().fuel);
     $('#status').innerHTML = statusPanel(analyze(build(), state.mission));
+    mountBuildSat();
   } else if (t.dataset.action === 'dslider') {
     const key = t.dataset.key;
     design()[key] = Number(t.value);
     const fmt = { dryMass: kg, fuelMass: kg, engines: v => `${v}`, thrust: v => `${num(v)} kN`, burnTime: v => `${v} s` }[key];
     $('#out-' + key).textContent = fmt(design()[key]);
     $('#d-live').innerHTML = designerLive(rocketAnalysis());
+    mountRocket();
     saveState();
   } else if (t.id === 'orb-scrub') {
     Orbiter3D.seekP(Number(t.value));

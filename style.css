@@ -836,3 +836,16 @@ input[type=range] { accent-color: var(--red); }
 .b3-cap.show { opacity: 1; transform: none; }
 .b3-help { position: absolute; right: 10px; bottom: 8px; z-index: 2; pointer-events: none; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; }
 @media (max-width: 760px) { .build3d { height: 260px; } }
+
+/* Rocket Designer: live 3D rocket */
+.d-live-grid { grid-template-columns: 200px minmax(0, 1fr); }
+.rk3d { position: relative; height: 360px; overflow: hidden; }
+.rk3d .rk-flat { position: absolute; inset: 0; display: grid; place-items: center; }
+.rk3d .orb-gl { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.rk3d .orb-gl:active { cursor: grabbing; }
+.rk3d .b3-cap { font-size: 10.5px; }
+.rk-labels { position: absolute; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+.rk-label { position: absolute; left: 0; top: 0; margin: -9px 0 0 14px; white-space: nowrap; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  background: rgba(6, 10, 19, 0.78); padding: 2px 5px; border-left: 2px solid #fff; color: #fff; }
+.rk-label.cp { border-left: 0; border-right: 2px solid #ff5d4d; color: #ffb4ab; margin-left: -14px; }
+@media (max-width: 1100px) { .d-live-grid { grid-template-columns: 1fr; } .rk3d { height: 320px; } }
